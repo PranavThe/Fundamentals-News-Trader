@@ -1,0 +1,145 @@
+"""CLI: run any pipeline stage on demand.
+
+  bot sync                 refresh the tradable universe from SEC
+  bot etl [--limit N]      fundamentals ETL (EDGAR -> cleaned quarterly rows)
+  bot screen               compute metrics + composite scores + candidate pool
+  bot top [--n 25]         show the current top of the candidate pool
+  bot news [--loop]        one news ingest+analyze cycle (or continuous loop)
+  bot analyze TSLA         force a full analysis of one ticker (uses latest news)
+  bot monitor              write the daily portfolio review report
+  bot run                  start the full scheduler (what Render runs)
+"""
+
+import json
+import logging
+import time
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from . import db
+from .config import settings
+
+app = typer.Typer(no_args_is_help=True, add_completion=False)
+console = Console()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
+@app.command()
+def sync():
+    """Refresh the tradable US-equity universe from SEC EDGAR."""
+    from .universe import sync_universe
+    count = sync_universe()
+    console.print(f"[green]Universe synced: {count} active listings[/green]")
+
+
+@app.command()
+def etl(limit: int = typer.Option(None, help="Only process the first N companies"),
+        ticker: list[str] = typer.Option(None, "--ticker", "-t", help="Restrict to tickers")):
+    """Fetch + clean fundamentals from SEC EDGAR."""
+    from .etl import run_etl
+    updated = run_etl(limit=limit, tickers=ticker or None)
+    console.print(f"[green]ETL complete: {updated} companies updated[/green]")
+
+
+@app.command()
+def screen():
+    """Compute TTM metrics, composite scores, and the candidate pool."""
+    from .screener import run_screen
+    scored = run_screen()
+    console.print(f"[green]Screen complete: {scored} companies scored[/green]")
+
+
+@app.command()
+def top(n: int = 25):
+    """Show the top of the candidate pool."""
+    conn = db.get_conn()
+    rows = conn.execute(
+        """SELECT s.rank, c.ticker, c.name, s.composite, s.quality, s.growth, s.health,
+                  s.in_pool, s.red_flags, m.revenue_ttm, m.revenue_growth_1y
+           FROM scores s JOIN companies c ON c.cik = s.cik
+           LEFT JOIN metrics m ON m.cik = s.cik
+           ORDER BY s.rank LIMIT ?""", (n,)).fetchall()
+    table = Table(title=f"Top {n} by composite fundamental score")
+    for col in ("Rank", "Ticker", "Name", "Composite", "Rev TTM", "Rev growth", "Flags"):
+        table.add_column(col)
+    for r in rows:
+        flags = ", ".join(json.loads(r["red_flags"] or "[]")) or "-"
+        rev = f"${r['revenue_ttm'] / 1e9:.1f}B" if r["revenue_ttm"] else "-"
+        growth = f"{r['revenue_growth_1y']:.0%}" if r["revenue_growth_1y"] is not None else "-"
+        table.add_row(str(r["rank"]), r["ticker"], (r["name"] or "")[:38],
+                      f"{r['composite']:.3f}", rev, growth, flags)
+    console.print(table)
+    conn.close()
+
+
+@app.command()
+def news(loop: bool = typer.Option(False, help="Keep polling on the configured interval")):
+    """Ingest Stock Titan news and analyze anything that triggers."""
+    from .engine import run_news_cycle
+    while True:
+        summaries = run_news_cycle()
+        if summaries:
+            for s in summaries:
+                console.print(f"[bold]{s}[/bold]")
+        else:
+            console.print("[dim]No triggers this cycle.[/dim]")
+        if not loop:
+            break
+        time.sleep(settings.news_poll_seconds)
+
+
+@app.command()
+def analyze(ticker: str):
+    """Force a full analysis of one ticker using its most recent stored news item."""
+    from . import broker
+    from .analyst import analyze as run_analysis, build_context, save_thesis
+    from .engine import execute_thesis, ingest_news
+
+    conn = db.get_conn()
+    ticker = ticker.upper()
+    ingest_news(conn)
+    news_row = conn.execute(
+        "SELECT * FROM news WHERE ticker = ? ORDER BY created_at DESC LIMIT 1",
+        (ticker,)).fetchone()
+    if news_row is None:
+        # Synthesize a neutral prompt so pure-fundamentals analysis still works.
+        db.save_news_item(conn, {"id": f"manual:{ticker}:{db.now_iso()}", "provider": "manual",
+                                 "ticker": ticker, "title": "Manual review (no fresh news)",
+                                 "url": None, "published_at": db.now_iso(),
+                                 "event_type": "other", "raw": {}})
+        conn.commit()
+        news_row = conn.execute(
+            "SELECT * FROM news WHERE ticker = ? ORDER BY created_at DESC LIMIT 1",
+            (ticker,)).fetchone()
+
+    context = build_context(conn, ticker, news_row, broker.get_quote(ticker))
+    console.print_json(json.dumps(context, default=str))
+    thesis = run_analysis(context)
+    console.print(f"\n[bold]{thesis.action.upper()}[/bold] conviction {thesis.conviction}/5")
+    console.print(thesis.thesis)
+    console.print(f"Size: ${thesis.suggested_position_usd:,.0f}  Limit: {thesis.limit_price}")
+    console.print(f"Invalidation: {thesis.invalidation_conditions}")
+    thesis_id = save_thesis(conn, ticker, thesis, news_row["id"])
+    outcome = execute_thesis(conn, thesis_id, ticker, thesis)
+    console.print(f"[cyan]{outcome}[/cyan]")
+    conn.close()
+
+
+@app.command()
+def monitor():
+    """Write the daily portfolio review report."""
+    from .monitor import run_monitor
+    console.print(run_monitor())
+
+
+@app.command()
+def run():
+    """Start the full scheduler (long-running worker; Render entrypoint)."""
+    from .scheduler import main
+    main()
+
+
+if __name__ == "__main__":
+    app()
