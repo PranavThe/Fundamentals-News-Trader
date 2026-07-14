@@ -101,16 +101,20 @@ The repo ships a `render.yaml` blueprint: a Docker **background worker** running
 
 1. Create a new Blueprint on Render pointing at this repo.
 2. Set the secret env vars in the dashboard: `EDGAR_USER_AGENT`, `ANTHROPIC_API_KEY`, and —
-   for trading — `ROBINHOOD_MCP_URL`, `ROBINHOOD_MCP_TOKEN`, `ROBINHOOD_ACCOUNT_NUMBER`.
+   for trading — `ROBINHOOD_MCP_TOKEN`, `ROBINHOOD_ACCOUNT_NUMBER`.
 3. Leave `TRADE_MODE=dry_run` for the first weeks; review `reports/` and the `orders` table;
    then graduate to `recommend`, and finally `auto`.
 
 ### Robinhood MCP credentials (open item)
 
-Inside a Claude Code session the Robinhood MCP is pre-authorized. Headless use from Render
-requires your own OAuth credential for Robinhood's MCP endpoint — set it via
-`ROBINHOOD_MCP_URL`/`ROBINHOOD_MCP_TOKEN`. Until then the bot runs data-only: screening,
-news, analysis, and dry-run sizing all work without a broker connection.
+Robinhood's official Trading MCP lives at a fixed endpoint —
+`https://agent.robinhood.com/mcp/trading` — which the bot uses by default (interactive MCP
+clients like Claude or Cursor are configured by pasting that same URL as a connector).
+Inside a Claude Code session the Robinhood MCP is pre-authorized; headless use from Render
+requires your own OAuth bearer credential, set via `ROBINHOOD_MCP_TOKEN`. Until then the
+bot runs data-only: screening, news, analysis, and dry-run sizing all work without a broker
+connection. (`ROBINHOOD_MCP_URL` remains available as an override for community or
+self-hosted MCP wrappers only.)
 
 ## Layout
 

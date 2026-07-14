@@ -21,8 +21,8 @@ services:
         sync: false             # set in the Render dashboard: "Your Name email@example.com"
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: ROBINHOOD_MCP_URL
-        sync: false
+      # ROBINHOOD_MCP_URL defaults to the official https://agent.robinhood.com/mcp/trading
+      # endpoint; add it here only if you use a community/self-hosted wrapper.
       - key: ROBINHOOD_MCP_TOKEN
         sync: false
       - key: ROBINHOOD_ACCOUNT_NUMBER

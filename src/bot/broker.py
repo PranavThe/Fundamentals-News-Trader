@@ -1,13 +1,15 @@
 """Robinhood MCP wrapper.
 
-Talks to Robinhood's hosted MCP server over streamable HTTP. Tool names mirror the
-Robinhood MCP: get_equity_quotes, get_portfolio, get_equity_positions,
+Talks to Robinhood's hosted Trading MCP server over streamable HTTP. Tool names
+mirror the Robinhood MCP: get_equity_quotes, get_portfolio, get_equity_positions,
 review_equity_order, place_equity_order.
 
-Headless auth: set ROBINHOOD_MCP_URL and ROBINHOOD_MCP_TOKEN (OAuth bearer) in the
-environment. When unconfigured, every method raises BrokerNotConfigured so callers
-can degrade gracefully (dry-run / recommend modes never need the broker for quotes
-to work — they just get None).
+The endpoint defaults to Robinhood's official fixed URL
+(https://agent.robinhood.com/mcp/trading); ROBINHOOD_MCP_URL only needs overriding
+for community/self-hosted wrappers. Headless auth: set ROBINHOOD_MCP_TOKEN (OAuth
+bearer). While the token is unset, every method raises BrokerNotConfigured so
+callers can degrade gracefully (dry-run / recommend modes never need the broker
+for quotes to work — they just get None).
 """
 
 import asyncio
@@ -30,15 +32,14 @@ class BrokerError(RuntimeError):
 
 @asynccontextmanager
 async def _session():
-    if not settings.robinhood_mcp_url:
+    if not settings.robinhood_mcp_url or not settings.robinhood_mcp_token:
         raise BrokerNotConfigured(
-            "Set ROBINHOOD_MCP_URL (and ROBINHOOD_MCP_TOKEN) to enable broker access")
+            "Set ROBINHOOD_MCP_TOKEN (OAuth bearer for the Robinhood Trading MCP) "
+            "to enable broker access")
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
-    headers = {}
-    if settings.robinhood_mcp_token:
-        headers["Authorization"] = f"Bearer {settings.robinhood_mcp_token}"
+    headers = {"Authorization": f"Bearer {settings.robinhood_mcp_token}"}
     async with streamablehttp_client(settings.robinhood_mcp_url, headers=headers) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()

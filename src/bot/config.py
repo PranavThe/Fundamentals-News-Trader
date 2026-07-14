@@ -43,7 +43,8 @@ class Settings(BaseSettings):
     paper_cash_usd: float = 10_000.0
 
     # --- Robinhood MCP connection (headless) ---
-    robinhood_mcp_url: str = ""
+    # Official Trading MCP endpoint; override only for community/self-hosted wrappers.
+    robinhood_mcp_url: str = "https://agent.robinhood.com/mcp/trading"
     robinhood_mcp_token: str = ""
     robinhood_account_number: str = ""
 
