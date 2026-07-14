@@ -1,0 +1,31 @@
+services:
+  - type: worker
+    name: fundamentals-news-trader
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    disk:
+      name: bot-data
+      mountPath: /app/data
+      sizeGB: 2
+    envVars:
+      - key: DB_PATH
+        value: /app/data/bot.db
+      - key: REPORTS_DIR
+        value: /app/data/reports
+      - key: TRADE_MODE
+        value: dry_run          # flip to recommend, then auto, once trusted
+      - key: KILL_SWITCH
+        value: "false"
+      - key: EDGAR_USER_AGENT
+        sync: false             # set in the Render dashboard: "Your Name email@example.com"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ROBINHOOD_MCP_URL
+        sync: false
+      - key: ROBINHOOD_MCP_TOKEN
+        sync: false
+      - key: ROBINHOOD_ACCOUNT_NUMBER
+        sync: false
+      - key: NOTIFY_WEBHOOK_URL
+        sync: false
