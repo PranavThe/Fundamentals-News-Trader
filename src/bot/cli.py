@@ -8,6 +8,11 @@
   bot analyze TSLA         force a full analysis of one ticker (uses latest news)
   bot monitor              write the daily portfolio review report
   bot run                  start the full scheduler (what Render runs)
+  bot broker login         one-time Robinhood OAuth (desktop browser)
+  bot broker status        check the broker connection end to end
+  bot broker export        print credentials blob to move to a server
+  bot broker import BLOB   install a credentials blob (e.g. in Render's shell)
+  bot broker logout        delete stored credentials
 """
 
 import json
@@ -165,6 +170,72 @@ def killswitch(state: str = typer.Argument(..., help="on | off")):
     conn.close()
     color = "red" if state == "on" else "green"
     console.print(f"[{color}]Kill switch {state.upper()}[/{color}]")
+
+
+broker_app = typer.Typer(no_args_is_help=True,
+                         help="Robinhood Trading MCP connection (OAuth login, status, key transfer).")
+app.add_typer(broker_app, name="broker")
+
+
+@broker_app.command()
+def login(manual: bool = typer.Option(
+        False, help="No local browser/port (e.g. SSH): approve on any desktop, "
+                    "then paste the redirect URL back")):
+    """One-time OAuth login to Robinhood's Trading MCP.
+
+    Needs a desktop browser (Robinhood only allows loopback redirects). Saves
+    auto-refreshing tokens to ROBINHOOD_TOKEN_PATH; run once, works headless after.
+    """
+    from .broker_auth import interactive_login
+    tools = interactive_login(manual=manual)
+    console.print(f"[green]Connected to Robinhood. {len(tools)} broker tools available:[/green]")
+    console.print(", ".join(tools))
+
+
+@broker_app.command()
+def status():
+    """Check the broker connection end to end (config, credentials, live call)."""
+    from . import broker
+    from .broker_auth import FileTokenStorage
+
+    storage = FileTokenStorage()
+    console.print(f"Endpoint: {settings.robinhood_mcp_url}")
+    console.print(f"Static token override: {'set' if settings.robinhood_mcp_token else 'no'}")
+    console.print(f"OAuth credentials: "
+                  f"{storage.path if storage.has_credentials() else 'none (run `bot broker login`)'}")
+    console.print(f"Account number: {settings.robinhood_account_number or '(not set)'}")
+    try:
+        quote = broker.call_tool("get_equity_quotes", {"symbols": ["AAPL"]})
+        console.print(f"[green]Live check OK — AAPL quote: {quote}[/green]")
+    except broker.BrokerNotConfigured as exc:
+        console.print(f"[yellow]Not connected: {exc}[/yellow]")
+    except broker.BrokerError as exc:
+        console.print(f"[red]Connected but the call failed: {exc}[/red]")
+
+
+@broker_app.command(name="export")
+def broker_export():
+    """Print the credentials blob (paste into `bot broker import` on the server)."""
+    from .broker_auth import export_blob
+    console.print(export_blob(), soft_wrap=True)
+
+
+@broker_app.command(name="import")
+def broker_import(blob: str = typer.Argument(None, help="Blob from `bot broker export` "
+                                                        "(omit to read from stdin)")):
+    """Install a credentials blob produced by `bot broker export`."""
+    import sys
+    from .broker_auth import import_blob
+    path = import_blob(blob or sys.stdin.read())
+    console.print(f"[green]Credentials installed at {path}[/green]")
+
+
+@broker_app.command()
+def logout():
+    """Delete the stored Robinhood credentials."""
+    from .broker_auth import FileTokenStorage
+    FileTokenStorage().clear()
+    console.print("[green]Credentials deleted.[/green]")
 
 
 @app.command()

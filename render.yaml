@@ -21,10 +21,11 @@ services:
         sync: false             # set in the Render dashboard: "Your Name email@example.com"
       - key: ANTHROPIC_API_KEY
         sync: false
-      # ROBINHOOD_MCP_URL defaults to the official https://agent.robinhood.com/mcp/trading
-      # endpoint; add it here only if you use a community/self-hosted wrapper.
-      - key: ROBINHOOD_MCP_TOKEN
-        sync: false
+      # Robinhood auth is OAuth, not an env var: run `bot broker login` locally once,
+      # then `bot broker export` -> paste into `bot broker import` in this service's
+      # Shell. Tokens live on the disk below so refreshes survive deploys.
+      - key: ROBINHOOD_TOKEN_PATH
+        value: /app/data/robinhood_tokens.json
       - key: ROBINHOOD_ACCOUNT_NUMBER
         sync: false
       - key: NOTIFY_WEBHOOK_URL

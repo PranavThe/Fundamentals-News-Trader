@@ -101,20 +101,43 @@ The repo ships a `render.yaml` blueprint: a Docker **background worker** running
 
 1. Create a new Blueprint on Render pointing at this repo.
 2. Set the secret env vars in the dashboard: `EDGAR_USER_AGENT`, `ANTHROPIC_API_KEY`, and —
-   for trading — `ROBINHOOD_MCP_TOKEN`, `ROBINHOOD_ACCOUNT_NUMBER`.
-3. Leave `TRADE_MODE=dry_run` for the first weeks; review `reports/` and the `orders` table;
+   for trading — `ROBINHOOD_ACCOUNT_NUMBER` (the agentic account; see below).
+3. Connect Robinhood (one-time OAuth; see the next section). Until then the bot runs
+   data-only: screening, news, analysis, and dry-run sizing all work without a broker.
+4. Leave `TRADE_MODE=dry_run` for the first weeks; review `reports/` and the `orders` table;
    then graduate to `recommend`, and finally `auto`.
 
-### Robinhood MCP credentials (open item)
+### Connecting Robinhood (agentic trading)
 
 Robinhood's official Trading MCP lives at a fixed endpoint —
-`https://agent.robinhood.com/mcp/trading` — which the bot uses by default (interactive MCP
-clients like Claude or Cursor are configured by pasting that same URL as a connector).
-Inside a Claude Code session the Robinhood MCP is pre-authorized; headless use from Render
-requires your own OAuth bearer credential, set via `ROBINHOOD_MCP_TOKEN`. Until then the
-bot runs data-only: screening, news, analysis, and dry-run sizing all work without a broker
-connection. (`ROBINHOOD_MCP_URL` remains available as an override for community or
-self-hosted MCP wrappers only.)
+`https://agent.robinhood.com/mcp/trading` (the same URL you'd paste as a connector in
+Claude or Cursor) — and it has **no API keys or static tokens**. Auth is an OAuth flow you
+approve once in a desktop browser; the server then issues short-lived access tokens plus a
+refresh token, which the bot stores and rotates automatically. Trading is confined to a
+dedicated **Agentic investing account**, separate from your main brokerage.
+
+One-time setup:
+
+1. In the Robinhood app, enable Agentic Trading: open the agentic account and fund it with
+   only what you want the bot to trade. Note its account number.
+2. On your **desktop** (Robinhood only allows `localhost` OAuth redirects):
+   ```bash
+   pip install -e . && bot broker login   # browser opens -> approve in Robinhood
+   bot broker status                      # verifies with a live quote call
+   ```
+   Tokens land in `data/robinhood_tokens.json` (chmod 600) and auto-refresh from then on.
+   No browser on the machine? `bot broker login --manual` prints the URL and lets you
+   paste the redirect back.
+3. To run on Render, move the credentials to the service's persistent disk:
+   ```bash
+   bot broker export                      # locally: prints a base64 blob
+   # Render dashboard -> Service -> Shell:
+   bot broker import <BLOB> && bot broker status
+   ```
+4. Set `ROBINHOOD_ACCOUNT_NUMBER` to the agentic account number.
+
+`ROBINHOOD_MCP_URL` / `ROBINHOOD_MCP_TOKEN` remain available as overrides for community or
+self-hosted MCP wrappers only; the official MCP needs neither.
 
 ## Layout
 
@@ -132,6 +155,7 @@ src/bot/
 ├── analyst.py     [6] Claude analyst -> structured Thesis (pydantic)
 ├── risk.py        [7] hard limits
 ├── broker.py      [8] Robinhood MCP wrapper
+├── broker_auth.py [8] Robinhood OAuth (login flow + token storage/refresh)
 ├── engine.py      [5-8] orchestration + reports + notifications
 ├── monitor.py     [9] daily position review
 ├── scheduler.py   APScheduler wiring (production entrypoint)

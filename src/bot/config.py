@@ -42,9 +42,16 @@ class Settings(BaseSettings):
     # Paper portfolio used by dry_run/recommend when the broker is not connected.
     paper_cash_usd: float = 10_000.0
 
-    # --- Robinhood MCP connection (headless) ---
+    # --- Robinhood MCP connection ---
     # Official Trading MCP endpoint; override only for community/self-hosted wrappers.
     robinhood_mcp_url: str = "https://agent.robinhood.com/mcp/trading"
+    # OAuth token cache written by `bot broker login`. Must be writable at runtime:
+    # refresh tokens rotate. On Render, keep it on the persistent disk.
+    robinhood_token_path: Path = Path("data/robinhood_tokens.json")
+    # Loopback port for the one-time OAuth browser redirect during `bot broker login`.
+    robinhood_oauth_port: int = 8917
+    # Optional static bearer override (community wrappers only — the official MCP
+    # has no static tokens; leave empty to use the OAuth flow above).
     robinhood_mcp_token: str = ""
     robinhood_account_number: str = ""
 

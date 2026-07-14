@@ -6,10 +6,14 @@ review_equity_order, place_equity_order.
 
 The endpoint defaults to Robinhood's official fixed URL
 (https://agent.robinhood.com/mcp/trading); ROBINHOOD_MCP_URL only needs overriding
-for community/self-hosted wrappers. Headless auth: set ROBINHOOD_MCP_TOKEN (OAuth
-bearer). While the token is unset, every method raises BrokerNotConfigured so
-callers can degrade gracefully (dry-run / recommend modes never need the broker
-for quotes to work — they just get None).
+for community/self-hosted wrappers.
+
+Auth: the official MCP uses OAuth with auto-refreshing tokens (see broker_auth.py)
+— run `bot broker login` once to create the token file. ROBINHOOD_MCP_TOKEN
+remains as a static-bearer override for community wrappers. While neither is
+configured, every method raises BrokerNotConfigured so callers can degrade
+gracefully (dry-run / recommend modes never need the broker for quotes to work —
+they just get None).
 """
 
 import asyncio
@@ -32,32 +36,50 @@ class BrokerError(RuntimeError):
 
 @asynccontextmanager
 async def _session():
-    if not settings.robinhood_mcp_url or not settings.robinhood_mcp_token:
-        raise BrokerNotConfigured(
-            "Set ROBINHOOD_MCP_TOKEN (OAuth bearer for the Robinhood Trading MCP) "
-            "to enable broker access")
+    if not settings.robinhood_mcp_url:
+        raise BrokerNotConfigured("ROBINHOOD_MCP_URL is empty")
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
-    headers = {"Authorization": f"Bearer {settings.robinhood_mcp_token}"}
-    async with streamablehttp_client(settings.robinhood_mcp_url, headers=headers) as (read, write, _):
+    headers: dict[str, str] = {}
+    auth = None
+    if settings.robinhood_mcp_token:
+        # Static bearer override for community/self-hosted MCP wrappers.
+        headers["Authorization"] = f"Bearer {settings.robinhood_mcp_token}"
+    else:
+        from .broker_auth import FileTokenStorage, build_auth
+        if not FileTokenStorage().has_credentials():
+            raise BrokerNotConfigured(
+                "Not connected to Robinhood. Run `bot broker login` on a desktop "
+                "(then `bot broker export` / `bot broker import` to move the "
+                "credentials to a server)")
+        auth = build_auth()  # refresh-only: no interactive handlers here
+    async with streamablehttp_client(settings.robinhood_mcp_url, headers=headers,
+                                     auth=auth) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             yield session
 
 
 async def _call(tool: str, arguments: dict):
-    async with _session() as session:
-        result = await session.call_tool(tool, arguments=arguments)
-        if result.isError:
-            raise BrokerError(f"{tool} failed: {result.content}")
-        # MCP tools return text content; Robinhood's payloads are JSON strings.
-        texts = [c.text for c in result.content if getattr(c, "text", None)]
-        joined = "\n".join(texts)
-        try:
-            return json.loads(joined)
-        except (json.JSONDecodeError, TypeError):
-            return joined
+    from mcp.client.auth import OAuthFlowError, OAuthTokenError
+
+    try:
+        async with _session() as session:
+            result = await session.call_tool(tool, arguments=arguments)
+    except (OAuthFlowError, OAuthTokenError) as exc:
+        # Stored tokens exist but could not be used or refreshed.
+        raise BrokerNotConfigured(
+            f"Robinhood OAuth session expired ({exc}); re-run `bot broker login`") from exc
+    if result.isError:
+        raise BrokerError(f"{tool} failed: {result.content}")
+    # MCP tools return text content; Robinhood's payloads are JSON strings.
+    texts = [c.text for c in result.content if getattr(c, "text", None)]
+    joined = "\n".join(texts)
+    try:
+        return json.loads(joined)
+    except (json.JSONDecodeError, TypeError):
+        return joined
 
 
 def call_tool(tool: str, arguments: dict):
