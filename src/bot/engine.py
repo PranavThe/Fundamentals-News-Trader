@@ -20,6 +20,20 @@ from .triggers import evaluate_pending_news
 log = logging.getLogger(__name__)
 
 
+def apply_runtime_overrides(conn) -> None:
+    """DB-backed toggles (set via `bot mode` / `bot killswitch`) override env config,
+    so trading can be flipped on/off without redeploying the worker."""
+    mode = db.get_runtime_setting(conn, "trade_mode")
+    if mode:
+        try:
+            settings.trade_mode = TradeMode(mode)
+        except ValueError:
+            log.error("ignoring invalid runtime trade_mode %r", mode)
+    kill = db.get_runtime_setting(conn, "kill_switch")
+    if kill is not None:
+        settings.kill_switch = kill.lower() in ("1", "true", "on", "yes")
+
+
 def ingest_news(conn, provider=None) -> int:
     provider = provider or StockTitanProvider()
     new_count = 0
@@ -90,6 +104,7 @@ def _extract_price(quote) -> float | None:
 
 def execute_thesis(conn, thesis_id: int, ticker: str, thesis: Thesis) -> str:
     """Apply the risk gate and act according to TRADE_MODE. Returns a status string."""
+    apply_runtime_overrides(conn)
     mode = settings.trade_mode
 
     if thesis.action in ("watch", "pass"):
@@ -124,8 +139,14 @@ def execute_thesis(conn, thesis_id: int, ticker: str, thesis: Thesis) -> str:
             detail += f" | broker: {str(result)[:300]}"
             conn.execute("UPDATE theses SET status = 'executed' WHERE id = ?", (thesis_id,))
         except (broker.BrokerNotConfigured, broker.BrokerError) as exc:
+            # Broker rejections (e.g. insufficient buying power despite our checks)
+            # are recorded and surfaced, never raised — the worker keeps running.
             status = "failed"
             detail += f" | error: {exc}"
+            _notify(f"[auto] order FAILED for {ticker}: {exc}")
+    elif mode == TradeMode.AUTO:
+        status = "blocked"
+        detail += " | no quote available; refusing to place an unpriced order"
     elif mode == TradeMode.RECOMMEND:
         status = "recommended"
 
@@ -166,8 +187,27 @@ def run_news_cycle(conn=None) -> list[str]:
     conn = conn or db.get_conn()
     summaries: list[str] = []
     try:
+        apply_runtime_overrides(conn)
         ingest_news(conn)
+
+        # Bankroll pre-check: in AUTO mode with a (near-)empty account, don't spend
+        # LLM calls analyzing buys we could never place. News on held names still
+        # gets analyzed because it may produce a sell.
+        can_buy = True
+        if settings.trade_mode == TradeMode.AUTO:
+            state = _portfolio_state(conn, "")
+            can_buy = (state.cash - settings.min_cash_reserve_usd) >= settings.min_order_usd
+            if not can_buy:
+                log.info("insufficient funds for new buys (cash $%.2f); "
+                         "only held positions will be analyzed", state.cash)
+        held = {r["ticker"] for r in conn.execute(
+            "SELECT DISTINCT ticker FROM theses WHERE status = 'executed'")}
+
         for trig in evaluate_pending_news(conn):
+            if not can_buy and trig.ticker not in held:
+                log.info("skipping %s (%s): insufficient funds for new positions",
+                         trig.ticker, trig.reason)
+                continue
             news_row = conn.execute("SELECT * FROM news WHERE id = ?", (trig.news_id,)).fetchone()
             quote = broker.get_quote(trig.ticker)
             context = build_context(conn, trig.ticker, news_row, quote)

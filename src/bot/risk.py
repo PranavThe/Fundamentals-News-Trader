@@ -61,17 +61,21 @@ def evaluate_buy(thesis_conviction: int, requested_usd: float,
         approved = daily_headroom
         reasons.append("capped by daily deployment budget")
 
-    # Cash reserve.
+    # Cash reserve / insufficient funds. An unfunded account lands here and the
+    # trade is blocked cleanly (never sent to the broker to bounce).
     spendable = portfolio.cash - settings.min_cash_reserve_usd
     if spendable <= 0:
         return RiskDecision(False, 0,
-                            [f"cash at/below reserve floor ${settings.min_cash_reserve_usd:,.0f}"])
+                            [f"insufficient funds: cash ${portfolio.cash:,.2f} is at/below the "
+                             f"${settings.min_cash_reserve_usd:,.0f} reserve floor"])
     if approved > spendable:
         approved = spendable
-        reasons.append("capped by cash reserve floor")
+        reasons.append(f"capped to spendable cash ${spendable:,.2f} (reserve floor kept)")
 
-    if approved < 50:  # not worth a trade
-        return RiskDecision(False, 0, reasons + ["approved amount below $50 minimum"])
+    if approved < settings.min_order_usd:
+        return RiskDecision(False, 0, reasons
+                            + [f"approved ${approved:,.2f} below ${settings.min_order_usd:,.0f} "
+                               "minimum order"])
     return RiskDecision(True, round(approved, 2), reasons)
 
 

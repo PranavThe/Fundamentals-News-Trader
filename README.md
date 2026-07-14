@@ -30,6 +30,32 @@ high-signal candidates per day.
 - **Market data + orders — Robinhood MCP**: quotes, portfolio, positions, and the
   `review_equity_order -> place_equity_order` flow.
 
+### Going live: the toggle
+
+Trading mode is a single runtime toggle — no redeploy, takes effect on the next cycle:
+
+```bash
+bot mode              # show the effective mode + kill switch
+bot mode recommend    # reports + notifications, no orders
+bot mode auto         # LIVE trading (asks for confirmation)
+bot mode dry_run      # back to paper
+bot killswitch on     # emergency stop: blocks ALL orders in every mode
+```
+
+The toggle is stored in the database and overrides the `TRADE_MODE` env var, so on Render
+you can flip it from a shell (`Service -> Shell -> bot mode auto`) while the worker runs.
+
+### Bankroll awareness
+
+The bot never assumes the account is funded. Position sizing is
+`min(requested, MAX_POSITION_USD, 10% of portfolio, daily budget headroom, cash above the
+reserve floor)` — so a small bankroll automatically produces small orders, an unfunded
+account blocks buys cleanly *before* they reach the broker (with "insufficient funds"
+recorded on the order), and in AUTO mode an empty account skips LLM analysis of new buys
+entirely (held positions are still reviewed so sells can fire). Anything below
+`MIN_ORDER_USD` is skipped. If the broker still rejects an order, the failure is recorded
+and notified — the worker never crashes on it.
+
 ### Safety model
 
 Real money demands layered controls, all in plain code the LLM can't override:

@@ -128,6 +128,46 @@ def analyze(ticker: str):
 
 
 @app.command()
+def mode(value: str = typer.Argument(None, help="dry_run | recommend | auto (omit to show)")):
+    """Show or flip the trading mode. THE toggle: `bot mode auto` goes live,
+    `bot mode dry_run` goes back to paper. Takes effect on the next cycle —
+    no redeploy needed (stored in the DB, overrides the TRADE_MODE env var)."""
+    from .config import TradeMode
+    conn = db.get_conn()
+    if value is None:
+        override = db.get_runtime_setting(conn, "trade_mode")
+        kill = db.get_runtime_setting(conn, "kill_switch")
+        effective = override or settings.trade_mode.value
+        console.print(f"Effective mode: [bold]{effective}[/bold]"
+                      f"  (env: {settings.trade_mode.value}, db override: {override or '-'})")
+        console.print(f"Kill switch: {kill or ('on' if settings.kill_switch else 'off')}")
+    else:
+        try:
+            m = TradeMode(value)
+        except ValueError:
+            console.print(f"[red]Invalid mode {value!r}. Use: dry_run | recommend | auto[/red]")
+            raise typer.Exit(1)
+        if m == TradeMode.AUTO:
+            typer.confirm("AUTO places REAL orders with REAL money. Continue?", abort=True)
+        db.set_runtime_setting(conn, "trade_mode", m.value)
+        console.print(f"[green]Trading mode set to {m.value}[/green]")
+    conn.close()
+
+
+@app.command()
+def killswitch(state: str = typer.Argument(..., help="on | off")):
+    """Emergency stop: `bot killswitch on` blocks ALL orders in every mode."""
+    if state not in ("on", "off"):
+        console.print("[red]Use: bot killswitch on|off[/red]")
+        raise typer.Exit(1)
+    conn = db.get_conn()
+    db.set_runtime_setting(conn, "kill_switch", state)
+    conn.close()
+    color = "red" if state == "on" else "green"
+    console.print(f"[{color}]Kill switch {state.upper()}[/{color}]")
+
+
+@app.command()
 def monitor():
     """Write the daily portfolio review report."""
     from .monitor import run_monitor

@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     min_cash_reserve_usd: float = 500.0
     max_position_pct_of_portfolio: float = 0.10
     min_conviction_to_trade: int = 4  # thesis conviction 1-5
+    min_order_usd: float = 10.0       # skip orders smaller than this (fractional shares ok)
 
     # --- notifications (optional; POSTs {"text": ...} JSON) ---
     notify_webhook_url: str = ""

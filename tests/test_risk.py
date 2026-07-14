@@ -51,3 +51,25 @@ def test_kill_switch_blocks_everything(monkeypatch):
 def test_sell_requires_position():
     assert not evaluate_sell(_portfolio(position_value_for_ticker=0)).allowed
     assert evaluate_sell(_portfolio(position_value_for_ticker=100)).allowed
+
+
+def test_zero_bankroll_blocked_cleanly():
+    """Unfunded account: buy is blocked with a clear reason, never sent to the broker."""
+    d = evaluate_buy(5, 500, _portfolio(cash=0, equity_value=0, open_positions=0))
+    assert not d.allowed
+    assert "insufficient funds" in d.reasons[0]
+
+
+def test_tiny_bankroll_below_min_order_blocked():
+    cash = settings.min_cash_reserve_usd + settings.min_order_usd / 2
+    d = evaluate_buy(5, 500, _portfolio(cash=cash, equity_value=0, open_positions=0))
+    assert not d.allowed
+    assert any("minimum order" in r for r in d.reasons)
+
+
+def test_small_bankroll_scales_position_down():
+    """$700 cash with a $500 reserve -> position capped to ~$200, not blocked."""
+    d = evaluate_buy(5, 1000, _portfolio(cash=settings.min_cash_reserve_usd + 200,
+                                         equity_value=0, open_positions=0))
+    assert d.allowed
+    assert d.approved_usd <= 200

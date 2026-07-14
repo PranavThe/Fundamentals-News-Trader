@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS runtime_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_news_ticker ON news (ticker);
 CREATE INDEX IF NOT EXISTS idx_financials_cik ON financials (cik);
 """
@@ -130,6 +136,22 @@ def upsert_financial_row(conn, cik: int, row: dict) -> None:
             {', '.join(f'{c}=excluded.{c}' for c in cols)}, updated_at=excluded.updated_at""",
         (cik, row["period_end"], *[row.get(c) for c in cols], now_iso()),
     )
+
+
+def get_runtime_setting(conn, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM runtime_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_runtime_setting(conn, key: str, value: str | None) -> None:
+    if value is None:
+        conn.execute("DELETE FROM runtime_settings WHERE key = ?", (key,))
+    else:
+        conn.execute(
+            "INSERT INTO runtime_settings (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, value, now_iso()))
+    conn.commit()
 
 
 def save_news_item(conn, item: dict) -> bool:
